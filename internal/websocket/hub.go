@@ -1,44 +1,102 @@
 package websocket
 
+import (
+	"log"
+	"time"
+)
+
+// Hub - barcha WebSocket client'larni boshqaruvchi markaz (dispatcher).
+// Vazifasi:
+// 1. Yangi client'larni ro'yxatga olish (register)
+// 2. Uzilib qolgan client'larni o'chirish (unregister)
+// 3. Xabarlarni barcha client'larga tarqatish (broadcast)
+//
+// Hub alohida goroutine'da ishlaydi va channel'lar orqali client'lar bilan
+// thread-safe aloqa qiladi. Bu pattern'ga "hub-and-spoke" deyiladi.
 type Hub struct {
-	// Registered clients
-	clients map[*Client]bool
-	// Inbound messages from the clients
-	broadcast chan *Message
-	// Register requests from the clients
-	register chan *Client
-	// Unregister requests from clients
-	unregister chan *Client
+	// Clients - hozirda ulangan barcha client'lar ro'yxati.
+	// Key: Client pointer, Value: true (mavjudligini bildiradi)
+	// Map ishlatilishi sababi: tez qidirish va o'chirish (O(1) complexity)
+	Clients map[*Client]bool
+
+	// Broadcast - client'lardan kelgan xabarlarni barcha client'larga
+	// tarqatish uchun channel. Client xabar yozsa, bu channel'ga tushadi
+	// va Hub uni barcha ulangan client'larga yuboradi.
+	Broadcast chan *Message
+
+	// Register - yangi client ulanganda, uni ro'yxatga olish uchun channel.
+	// Handler yangi client yaratganda, bu channel'ga yuboradi va
+	// Hub uni Clients map'iga qo'shadi.
+	Register chan *Client
+
+	// Unregister - client uzilganda, uni ro'yxatdan o'chirish uchun channel.
+	// Client connection uzilganda yoki xato bo'lganda, ReadPump defer'da
+	// bu channel'ga yuboradi va Hub uni Clients map'idan o'chiradi.
+	Unregister chan *Client
 }
 
+// NewHub - yangi Hub instance yaratadi va barcha zarur channel'lar hamda
+// map'larni initialize qiladi. Bu constructor pattern - Go'da struct'larni
+// to'g'ri boshlang'ich holatda yaratish uchun ishlatiladigan standart usul.
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[*Client]bool),
-		broadcast:  make(chan *Message),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		Clients:    make(map[*Client]bool),
+		Broadcast:  make(chan *Message),
+		Register:   make(chan *Client),
+		Unregister: make(chan *Client),
 	}
 }
 
+// Run - Hub'ning asosiy ishlash sikli. Bu method alohida goroutine'da
+// ishga tushirilishi kerak: go hub.Run()
+//
+// Bu method abadiy tsiklda 3 ta channel'ni tinglaydi:
+// - Register: yangi client ulanganda
+// - Unregister: client uzilganda
+// - Broadcast: xabar tarqatish kerak bo'lganda
+//
+// Select statement orqali qaysi channel'ga ma'lumot kelganini aniqlaydi
+// va tegishli amalni bajaradi.
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.register:
-			h.clients[client] = true
-		case client := <-h.unregister:
-			if _, ok := h.clients[client]; ok {
-				delete(h.clients, client)
-				close(client.send)
+		case client := <-h.Register:
+			h.Clients[client] = true
+		case client := <-h.Unregister:
+			log.Printf("Client unregister qilinmoqda: %s", client.Username)
+			if _, ok := h.Clients[client]; ok {
+				// Client'ni ro'yxatdan o'chirish
+				delete(h.Clients, client)
+				close(client.Send)
+
+				// Leave message yaratish va barcha qolgan clientlarga yuborish
+				leaveMsg := &Message{
+					Type:      MessageTypeLeave,
+					Content:   client.Username + " has left the room.",
+					Username:  client.Username,
+					RoomID:    client.RoomID,
+					Timestamp: time.Now().Unix(),
+				}
+
+				// Leave message'ni barcha qolgan clientlarga yuborish
+				for c := range h.Clients {
+					select {
+					case c.Send <- leaveMsg:
+						log.Printf("Leave message yuborildi: %s -> %s", client.Username, c.Username)
+					default:
+						// Client band bo'lsa, o'tkazib yuboramiz
+					}
+				}
 			}
-		case message := <-h.broadcast:
-			for client := range h.clients {
+		case message := <-h.Broadcast:
+			for client := range h.Clients {
 				select {
-				case client.send <- message:
+				case client.Send <- message:
 					// Message muvaffaqiyatli yuborildi
 				default:
 					// Mijoz javob bermayotganda uni ro'yxatdan o'chirish
-					close(client.send)
-					delete(h.clients, client)
+					close(client.Send)
+					delete(h.Clients, client)
 				}
 			}
 		}
