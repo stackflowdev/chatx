@@ -96,18 +96,21 @@ func (h *Hub) Run() {
 				}
 			}
 		case message := <-h.Broadcast:
-			// Xabarni store'ga saqlash (faqat 1 marta)
+			// Xabarni store'ga saqlash (faqat 1 marta, room bo'yicha)
 			h.Store.AddMessage(message)
 
-			// Barcha clientlarga yuborish
+			// Faqat o'sha room'dagi clientlarga yuborish
 			for client := range h.Clients {
-				select {
-				case client.Send <- message:
-					// Message muvaffaqiyatli yuborildi
-				default:
-					// Mijoz javob bermayotganda uni ro'yxatdan o'chirish
-					close(client.Send)
-					delete(h.Clients, client)
+				// Room filterlash - faqat bir xil room'dagi clientlar xabar oladi
+				if client.RoomID == message.RoomID {
+					select {
+					case client.Send <- message:
+						// Message muvaffaqiyatli yuborildi
+					default:
+						// Mijoz javob bermayotganda uni ro'yxatdan o'chirish
+						close(client.Send)
+						delete(h.Clients, client)
+					}
 				}
 			}
 		}

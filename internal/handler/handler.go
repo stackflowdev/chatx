@@ -74,9 +74,9 @@ func (h *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			// Hub endi bu clientni ro'yxatida saqlaydi va xabar tarqatadi
 			client.Hub.Register <- client
 
-			// Message history yuborish - yangi user ulanganda eski xabarlarni ko'radi
+			// Message history yuborish - yangi user ulanganda o'sha room'ning eski xabarlarini ko'radi
 			// Oxirgi 50 ta xabarni store'dan olib, faqat shu client'ga yuborish
-			history := client.Hub.Store.GetRecentMessages(50)
+			history := client.Hub.Store.GetRecentMessages(roomID, 50)
 			for _, msg := range history {
 				client.Send <- msg // Faqat bu client'ga (boshqalarga emas)
 			}

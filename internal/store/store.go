@@ -5,25 +5,28 @@ import (
 	"sync"
 )
 
-// Store - xabarlarni in-memory (xotirada) saqlash uchun struktura.
+// Store - xabarlarni in-memory (xotirada) room'lar bo'yicha saqlash uchun struktura.
 // Bu database o'rniga oddiy xotiradan foydalanadi - yangi xabar kelganda
-// saqlaydi va yangi user ulanganda eski xabarlarni ko'rsatish imkonini beradi.
+// saqlaydi va yangi user ulanganda o'sha room'ning eski xabarlarini ko'rsatadi.
 //
 // Thread-safe: Ko'p goroutine bir vaqtda ishlatishi mumkin, RWMutex orqali
 // himoyalangan. Bu chat app'da juda muhim, chunki ko'p client bir vaqtda
 // xabar yuborishi va o'qishi mumkin.
+//
+// Room-based: Har bir room uchun alohida xabarlar ro'yxati saqlanadi.
+// Masalan: "general" room'ining xabarlari "golang" room'idan ajratilgan.
 type Store struct {
-	mu       sync.RWMutex       // Read-Write qulf - thread-safe qilish uchun
-	messages []*message.Message // Saqlangan barcha xabarlar (slice)
-	maxSize  int                // Maksimal saqlash hajmi (eski xabarlar o'chiriladi)
+	mu       sync.RWMutex                  // Read-Write qulf - thread-safe qilish uchun
+	messages map[string][]*message.Message // Key: roomID, Value: xabarlar slice'i
+	maxSize  int                           // Har bir room uchun maksimal xabarlar soni
 }
 
 // NewStore - yangi Store instance yaratadi.
-// maxSize - maksimal nechta xabar saqlanishi (masalan 100).
-// Agar limit to'lsa, eng eski xabar o'chiriladi (FIFO - First In First Out).
+// maxSize - har bir room uchun maksimal nechta xabar saqlanishi (masalan 100).
+// Agar biror room'da limit to'lsa, o'sha room'ning eng eski xabari o'chiriladi.
 func NewStore(maxSize int) *Store {
 	return &Store{
-		messages: make([]*message.Message, 0, maxSize), // Bo'sh slice, capacity = maxSize
+		messages: make(map[string][]*message.Message), // Bo'sh map - room'lar kerak bo'lganda yaratiladi
 		maxSize:  maxSize,
 	}
 }
@@ -36,12 +39,17 @@ func NewStore(maxSize int) *Store {
 func (s *Store) AddMessage(msg *message.Message) {
 	s.mu.Lock()         // Qulfni yopish - faqat men yozaman
 	defer s.mu.Unlock() // Function tugaganda qulfni ochish
+	roomId := msg.RoomID
 
-	s.messages = append(s.messages, msg) // Xabarni slice'ga qo'shish
+	if s.messages[roomId] == nil {
+		s.messages[roomId] = make([]*message.Message, 0, s.maxSize)
+	}
+
+	s.messages[roomId] = append(s.messages[roomId], msg)
 
 	// Agar limit oshib ketsa, eng eski xabarni o'chirish
-	if len(s.messages) > s.maxSize {
-		s.messages = s.messages[1:] // 1-chisini o'chirish, qolganlarni siljitish
+	if len(s.messages[roomId]) > s.maxSize {
+		s.messages[roomId] = s.messages[roomId][1:] // 1-chisini o'chirish, qolganlarni siljitish
 	}
 }
 
@@ -53,21 +61,19 @@ func (s *Store) AddMessage(msg *message.Message) {
 //
 // Agar count store'dagi xabarlardan ko'p bo'lsa, barcha xabarlar qaytariladi.
 // Agar store bo'sh bo'lsa yoki count <= 0 bo'lsa, bo'sh slice qaytariladi.
-func (s *Store) GetRecentMessages(count int) []*message.Message {
-	s.mu.RLock()         // O'qish qulfi - ko'pchilik o'qishi mumkin
-	defer s.mu.RUnlock() // Function tugaganda qulfni ochish
+func (s *Store) GetRecentMessages(roomID string, count int) []*message.Message {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	// Agar messages bo'sh yoki count noto'g'ri bo'lsa
-	if len(s.messages) == 0 || count <= 0 {
-		return []*message.Message{} // Bo'sh slice qaytarish
+	roomMessages := s.messages[roomID]
+
+	if len(roomMessages) == 0 || count <= 0 {
+		return []*message.Message{}
 	}
 
-	// Agar count juda katta bo'lsa, barcha xabarlarni qaytarish
-	if count > len(s.messages) {
-		count = len(s.messages)
+	if count > len(roomMessages) {
+		count = len(roomMessages)
 	}
 
-	// Oxirgi 'count' ta xabarni slice qilish va qaytarish
-	// Masalan: agar 100 ta xabar bor va count=50, oxirgi 50 tasini olish
-	return s.messages[len(s.messages)-count:]
+	return roomMessages[len(roomMessages)-count:]
 }
