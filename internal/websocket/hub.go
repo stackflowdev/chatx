@@ -1,6 +1,8 @@
 package websocket
 
 import (
+	"edu-tga/internal/message"
+	"edu-tga/internal/store"
 	"log"
 	"time"
 )
@@ -22,7 +24,7 @@ type Hub struct {
 	// Broadcast - client'lardan kelgan xabarlarni barcha client'larga
 	// tarqatish uchun channel. Client xabar yozsa, bu channel'ga tushadi
 	// va Hub uni barcha ulangan client'larga yuboradi.
-	Broadcast chan *Message
+	Broadcast chan *message.Message
 
 	// Register - yangi client ulanganda, uni ro'yxatga olish uchun channel.
 	// Handler yangi client yaratganda, bu channel'ga yuboradi va
@@ -33,6 +35,10 @@ type Hub struct {
 	// Client connection uzilganda yoki xato bo'lganda, ReadPump defer'da
 	// bu channel'ga yuboradi va Hub uni Clients map'idan o'chiradi.
 	Unregister chan *Client
+
+	// Store - xabarlarni saqlash uchun in-memory storage.
+	// Yangi user ulanganda oxirgi xabarlarni ko'rsatish imkonini beradi.
+	Store *store.Store
 }
 
 // NewHub - yangi Hub instance yaratadi va barcha zarur channel'lar hamda
@@ -41,9 +47,10 @@ type Hub struct {
 func NewHub() *Hub {
 	return &Hub{
 		Clients:    make(map[*Client]bool),
-		Broadcast:  make(chan *Message),
+		Broadcast:  make(chan *message.Message),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
+		Store:      store.NewStore(10),
 	}
 }
 
@@ -70,8 +77,8 @@ func (h *Hub) Run() {
 				close(client.Send)
 
 				// Leave message yaratish va barcha qolgan clientlarga yuborish
-				leaveMsg := &Message{
-					Type:      MessageTypeLeave,
+				leaveMsg := &message.Message{
+					Type:      message.MessageTypeLeave,
 					Content:   client.Username + " has left the room.",
 					Username:  client.Username,
 					RoomID:    client.RoomID,
@@ -89,6 +96,10 @@ func (h *Hub) Run() {
 				}
 			}
 		case message := <-h.Broadcast:
+			// Xabarni store'ga saqlash (faqat 1 marta)
+			h.Store.AddMessage(message)
+
+			// Barcha clientlarga yuborish
 			for client := range h.Clients {
 				select {
 				case client.Send <- message:

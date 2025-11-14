@@ -33,7 +33,7 @@ func main() {
 	// 4. Server ishga tushirish
 	addr := ":8080"
 	log.Printf("Server ishga tushdi: http://localhost%s", addr)
-	log.Printf("Websocket endpoint: ws://localhost%s/ws?username=Ali&room=general", addr)
+	log.Printf("Websocket endpoint: ws://localhost%s/ws?username=Name&room=general", addr)
 
 	// HTTP server'ni ishga tushirish (blocking - server to'xtatilguncha kutadi)
 	if err := http.ListenAndServe(addr, nil); err != nil {

@@ -1,4 +1,4 @@
-package websocket
+package message
 
 // Message types - xabar turlari
 // Bu konstantlar client va server o'rtasida yuborilayotgan

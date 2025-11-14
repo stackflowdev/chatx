@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"edu-tga/internal/message"
 	"edu-tga/internal/websocket"
 	"log"
 	"net/http"
@@ -60,11 +61,11 @@ func (h *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 			// Yangi Client yaratish - bu foydalanuvchining WebSocket connection'i
 			client := &websocket.Client{
-				Hub:      h.hub,                              // Qaysi Hub'ga tegishli
-				Conn:     conn,                               // WebSocket connection
-				Send:     make(chan *websocket.Message, 256), // Xabar yuborish uchun buffered channel
-				Username: username,                           // Foydalanuvchi ismi
-				RoomID:   roomID,                             // Xona nomi
+				Hub:      h.hub,                            // Qaysi Hub'ga tegishli
+				Conn:     conn,                             // WebSocket connection
+				Send:     make(chan *message.Message, 256), // Xabar yuborish uchun buffered channel
+				Username: username,                         // Foydalanuvchi ismi
+				RoomID:   roomID,                           // Xona nomi
 			}
 
 			log.Printf("Client yaratildi: %s, xona: %s", username, roomID)
@@ -73,10 +74,17 @@ func (h *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 			// Hub endi bu clientni ro'yxatida saqlaydi va xabar tarqatadi
 			client.Hub.Register <- client
 
+			// Message history yuborish - yangi user ulanganda eski xabarlarni ko'radi
+			// Oxirgi 50 ta xabarni store'dan olib, faqat shu client'ga yuborish
+			history := client.Hub.Store.GetRecentMessages(50)
+			for _, msg := range history {
+				client.Send <- msg // Faqat bu client'ga (boshqalarga emas)
+			}
+
 			// Join message yaratish va barcha clientlarga yuborish
 			// "Ali has joined the room" kabi xabar
-			joinMsg := &websocket.Message{
-				Type:      websocket.MessageTypeJoin,
+			joinMsg := &message.Message{
+				Type:      message.MessageTypeJoin,
 				Content:   username + " has joined the room.",
 				Username:  username,
 				RoomID:    roomID,
