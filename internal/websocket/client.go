@@ -21,11 +21,11 @@ const (
 //   - ReadPump: Browser'dan xabar o'qiydi va Hub'ga yuboradi
 //   - WritePump: Hub'dan xabar olib, browser'ga yozadi
 type Client struct {
-	Hub      *Hub                 // Qaysi Hub'ga tegishli (barcha clientlarni boshqaruvchi)
-	Conn     *websocket.Conn      // WebSocket connection
+	Hub      *Hub                  // Qaysi Hub'ga tegishli (barcha clientlarni boshqaruvchi)
+	Conn     *websocket.Conn       // WebSocket connection
 	Send     chan *message.Message // Hub'dan kelgan xabarlarni kutish uchun channel (buffered)
-	Username string               // Foydalanuvchi ismi
-	RoomID   string               // Qaysi xonada (room)
+	Username string                // Foydalanuvchi ismi
+	RoomID   string                // Qaysi xonada (room)
 }
 
 // ReadPump - Browser'dan xabarlarni o'qish uchun goroutine.
