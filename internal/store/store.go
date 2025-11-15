@@ -1,7 +1,7 @@
 package store
 
 import (
-	"edu-tga/internal/message"
+	"chatx/internal/message"
 	"sync"
 )
 
@@ -21,9 +21,6 @@ type Store struct {
 	maxSize  int                           // Har bir room uchun maksimal xabarlar soni
 }
 
-// NewStore - yangi Store instance yaratadi.
-// maxSize - har bir room uchun maksimal nechta xabar saqlanishi (masalan 100).
-// Agar biror room'da limit to'lsa, o'sha room'ning eng eski xabari o'chiriladi.
 func NewStore(maxSize int) *Store {
 	return &Store{
 		messages: make(map[string][]*message.Message), // Bo'sh map - room'lar kerak bo'lganda yaratiladi

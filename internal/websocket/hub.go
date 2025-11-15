@@ -1,8 +1,10 @@
 package websocket
 
 import (
-	"edu-tga/internal/message"
-	"edu-tga/internal/store"
+	"context"
+	"chatx/internal/config"
+	"chatx/internal/message"
+	"chatx/internal/store"
 	"log"
 	"time"
 )
@@ -15,6 +17,17 @@ import (
 //
 // Hub alohida goroutine'da ishlaydi va channel'lar orqali client'lar bilan
 // thread-safe aloqa qiladi. Bu pattern'ga "hub-and-spoke" deyiladi.
+//
+// Nima uchun Hub kerak?
+//   - Barcha client'larni markazdan boshqarish (centralized control)
+//   - Thread-safety: faqat 1 ta goroutine Clients map'ini o'zgartiradi
+//   - Message broadcasting: 1 ta xabar kelsa, barchasiga yuboradi
+//   - Room filtering: har bir room alohida xabar oladi
+//
+// Nima uchun channel'lar?
+//   - Go'da channel'lar thread-safe (mutex kerak emas)
+//   - Goroutine'lar o'rtasida xavfsiz aloqa
+//   - select statement bilan bir nechta event'ni kutish mumkin
 type Hub struct {
 	// Clients - hozirda ulangan barcha client'lar ro'yxati.
 	// Key: Client pointer, Value: true (mavjudligini bildiradi)
@@ -39,18 +52,34 @@ type Hub struct {
 	// Store - xabarlarni saqlash uchun in-memory storage.
 	// Yangi user ulanganda oxirgi xabarlarni ko'rsatish imkonini beradi.
 	Store *store.Store
+
+	// Config - ilova konfiguratsiyasi (timeouts, sizes, history count va boshqalar).
+	// Hub orqali barcha client'lar config'ga murojaat qilishi mumkin.
+	Config *config.Config
 }
 
 // NewHub - yangi Hub instance yaratadi va barcha zarur channel'lar hamda
 // map'larni initialize qiladi. Bu constructor pattern - Go'da struct'larni
 // to'g'ri boshlang'ich holatda yaratish uchun ishlatiladigan standart usul.
-func NewHub() *Hub {
+//
+// Parametrlar:
+//   cfg - ilova konfiguratsiyasi (store size, timeouts va boshqalar)
+//
+// Qaytaradi:
+//   *Hub - to'liq initialize qilingan Hub instance
+//
+// Nima uchun make() ishlatiladi?
+//   - make(map) - bo'sh map yaratadi (nil emas!)
+//   - make(chan) - channel yaratadi (buffered yoki unbuffered)
+//   - Agar make() qilmasak, map va channel nil bo'ladi va panic beradi
+func NewHub(cfg *config.Config) *Hub {
 	return &Hub{
 		Clients:    make(map[*Client]bool),
 		Broadcast:  make(chan *message.Message),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
-		Store:      store.NewStore(10),
+		Store:      store.NewStore(cfg.StoreMaxSize),
+		Config:     cfg, // Config'ni saqlash - client'lar ishlatishi uchun
 	}
 }
 
@@ -64,17 +93,24 @@ func NewHub() *Hub {
 //
 // Select statement orqali qaysi channel'ga ma'lumot kelganini aniqlaydi
 // va tegishli amalni bajaradi.
-func (h *Hub) Run() {
+func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
+
+		case <-ctx.Done():
+			log.Printf("Hub: context done, shutting down")
+			// Qo'shimcha cleanup (connectionlarni yoping) kerak bo'lsa shu yerga qo'shing
+			return
+
 		case client := <-h.Register:
 			h.Clients[client] = true
+			log.Printf("Hub: register client %s (room=%s)", client.Username, client.RoomID)
+
 		case client := <-h.Unregister:
-			log.Printf("Client unregister qilinmoqda: %s", client.Username)
 			if _, ok := h.Clients[client]; ok {
-				// Client'ni ro'yxatdan o'chirish
 				delete(h.Clients, client)
 				close(client.Send)
+				log.Printf("Hub: unregister client %s (room=%s)", client.Username, client.RoomID)
 
 				// Leave message yaratish va barcha qolgan clientlarga yuborish
 				leaveMsg := &message.Message{
@@ -85,19 +121,25 @@ func (h *Hub) Run() {
 					Timestamp: time.Now().Unix(),
 				}
 
-				// Leave message'ni barcha qolgan clientlarga yuborish
+				// Faqat o'sha room'dagi clientlarga yuborish
 				for c := range h.Clients {
+					if c.RoomID != client.RoomID {
+						continue
+					}
 					select {
 					case c.Send <- leaveMsg:
-						log.Printf("Leave message yuborildi: %s -> %s", client.Username, c.Username)
 					default:
-						// Client band bo'lsa, o'tkazib yuboramiz
+						close(c.Send)
+						delete(h.Clients, c)
 					}
 				}
 			}
+
 		case message := <-h.Broadcast:
 			// Xabarni store'ga saqlash (faqat 1 marta, room bo'yicha)
-			h.Store.AddMessage(message)
+			if h.Store != nil && message != nil {
+				h.Store.AddMessage(message)
+			}
 
 			// Faqat o'sha room'dagi clientlarga yuborish
 			for client := range h.Clients {
@@ -105,9 +147,7 @@ func (h *Hub) Run() {
 				if client.RoomID == message.RoomID {
 					select {
 					case client.Send <- message:
-						// Message muvaffaqiyatli yuborildi
 					default:
-						// Mijoz javob bermayotganda uni ro'yxatdan o'chirish
 						close(client.Send)
 						delete(h.Clients, client)
 					}

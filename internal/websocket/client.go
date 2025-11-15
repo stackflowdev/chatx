@@ -1,18 +1,12 @@
 package websocket
 
 import (
-	"edu-tga/internal/message"
+	"chatx/internal/message"
+	"chatx/internal/validator"
+	"log"
 	"time"
 
 	"golang.org/x/net/websocket"
-)
-
-// WebSocket connection sozlamalari
-const (
-	writeWait      = 10 * time.Second    // Browser'ga xabar yozish uchun maksimal kutish vaqti
-	pongWait       = 60 * time.Second    // Browser'dan pong javobini kutish vaqti
-	pingPeriod     = (pongWait * 9) / 10 // Qancha vaqtda ping yuborish (54 soniya)
-	maxMessageSize = 512                 // Maksimal xabar hajmi (bayt'da)
 )
 
 // Client - bitta WebSocket connection'ni boshqaradi.
@@ -48,8 +42,16 @@ func (c *Client) ReadPump() {
 		// Browser'dan JSON xabar o'qish (blocking - xabar kelguncha kutadi)
 		err := websocket.JSON.Receive(c.Conn, &msg)
 		if err != nil {
-			// Xato (connection uzilgan, timeout, format xato) - tsikldan chiqish
+			log.Printf("Xabar o'qishda xato [%s]:%v", c.Username, err)
 			break
+		}
+
+		// Xabar content'ini validatsiya qilish (faqat chat type xabarlar uchun)
+		if msg.Type == message.MessageTypeChat {
+			if err := validator.ValidateMessageContent(msg.Content); err != nil {
+				log.Printf("Xabar validation xatosi [%s]: %v", c.Username, err)
+				continue // Bu xabarni ignore qilamiz, keyingisini o'qiymiz
+			}
 		}
 
 		// Xabarga metadata qo'shish (client browser'da yubormasligi mumkin)
@@ -70,8 +72,24 @@ func (c *Client) ReadPump() {
 // Connection uzilganda yoki channel yopilganda:
 //   - Ticker'ni to'xtatadi
 //   - WebSocket connection'ni yopadi
+//
+// Ping/Pong mexanizmi:
+//   Server ping yuboradi -> Browser pong bilan javob beradi
+//   Agar browser javob bermasa, connection o'lik deb hisoblanadi
 func (c *Client) WritePump() {
-	// Ping yuborish uchun timer (har 54 soniyada)
+	// Config'dan timeout qiymatlarini olish (Hub orqali)
+	// Agar config yo'q bo'lsa, default qiymatlar ishlatiladi
+	pingPeriod := 54 * time.Second
+
+	if c.Hub != nil && c.Hub.Config != nil {
+		// writeWait kelajakda deadline qo'yish uchun ishlatilishi mumkin
+		// Hozircha golang.org/x/net/websocket kutubxonasi deadline'ni 
+		// to'g'ridan-to'g'ri qo'llab-quvvatlamaydi, shuning uchun comment qilamiz
+		// writeWait = c.Hub.Config.WriteWait
+		pingPeriod = c.Hub.Config.PingPeriod
+	}
+
+	// Ping yuborish uchun timer
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()  // Timer'ni to'xtatish
@@ -89,17 +107,22 @@ func (c *Client) WritePump() {
 			}
 
 			// Xabarni JSON formatda browser'ga yuborish
+			// golang.org/x/net/websocket orqali JSON encoding
 			err := websocket.JSON.Send(c.Conn, message)
 			if err != nil {
-				// Yozish xatosi - connection uzilgan
+				log.Printf("Xabar yozishda xato [%s]:%v", c.Username, err)
 				return
 			}
 
 		// Case 2: Ping vaqti keldi (har 54 soniyada)
 		case <-ticker.C:
 			// Ping yuborish - connection alive ekanini tekshirish
-			// Oddiy chat uchun bu optional, lekin production'da foydali
-			// (Browser pong javob bermasa, connection o'lib qolgan deb hisoblanadi)
+			// golang.org/x/net/websocket kutubxonasi avtomatik ping/pong qiladi
+			// Shuning uchun bu yerda qo'shimcha kod kerak emas
+			// Ticker faqat connection health monitoring uchun saqlanadi
+			//
+			// Kelajakda: Agar aniq ping yuborish kerak bo'lsa:
+			// err := websocket.Message.Send(c.Conn, []byte("ping"))
 		}
 	}
 }

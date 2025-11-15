@@ -1,8 +1,10 @@
 package handler
 
 import (
-	"edu-tga/internal/message"
-	"edu-tga/internal/websocket"
+	"chatx/internal/config"
+	"chatx/internal/message"
+	"chatx/internal/validator"
+	"chatx/internal/websocket"
 	"log"
 	"net/http"
 	"time"
@@ -15,12 +17,16 @@ import (
 // Client yaratadi va Hub'ga register qiladi.
 type ChatHandler struct {
 	hub *websocket.Hub // Barcha clientlarni boshqaruvchi Hub
+	cfg *config.Config
 }
 
 // NewChatHandler - yangi ChatHandler instance yaratadi.
 // hub parametri orqali dependency injection qilinadi.
-func NewChatHandler(hub *websocket.Hub) *ChatHandler {
-	return &ChatHandler{hub: hub}
+func NewChatHandler(hub *websocket.Hub, cfg *config.Config) *ChatHandler {
+	return &ChatHandler{
+		hub: hub,
+		cfg: cfg,
+	}
 }
 
 // ServeWS - WebSocket connection'ni boshqarish uchun HTTP handler method.
@@ -36,18 +42,21 @@ func NewChatHandler(hub *websocket.Hub) *ChatHandler {
 func (h *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("WebSocket request keldi: %s", r.URL.String())
 
-	// Query parameters'dan username va roomID ni olish
-	// Masalan: ?username=Ali&room=general
 	username := r.URL.Query().Get("username")
 	roomID := r.URL.Query().Get("room")
 
-	// Username majburiy - bo'lmasa 400 Bad Request qaytarish
-	if username == "" {
-		http.Error(w, "Username required", http.StatusBadRequest)
+	if err := validator.ValidateUsername(username); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		log.Printf("Username validation xatosi: %v", err)
 		return
 	}
 
-	// Room optional - default qiymat "general"
+	if err := validator.ValidateRoomID(roomID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		log.Printf("Room validation xatosi: %v", err)
+		return
+	}
+
 	if roomID == "" {
 		roomID = "general"
 	}
@@ -76,7 +85,7 @@ func (h *ChatHandler) ServeWS(w http.ResponseWriter, r *http.Request) {
 
 			// Message history yuborish - yangi user ulanganda o'sha room'ning eski xabarlarini ko'radi
 			// Oxirgi 50 ta xabarni store'dan olib, faqat shu client'ga yuborish
-			history := client.Hub.Store.GetRecentMessages(roomID, 50)
+			history := client.Hub.Store.GetRecentMessages(roomID, h.cfg.HistoryCount)
 			for _, msg := range history {
 				client.Send <- msg // Faqat bu client'ga (boshqalarga emas)
 			}

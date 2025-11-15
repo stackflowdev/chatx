@@ -1,4 +1,4 @@
-module edu-tga
+module chatx
 
 go 1.25.1
 
