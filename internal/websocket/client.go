@@ -33,7 +33,9 @@ func (c *Client) ReadPump() {
 	// defer - function tugaganda (xato yoki normal) bajariladi
 	defer func() {
 		c.Hub.Unregister <- c // Hub'ga "men ketdim" deb xabar
-		c.Conn.Close()        // Connection'ni yopish
+		if err := c.Conn.Close(); err != nil {
+			log.Printf("Connection yopishda xato [%s]: %v", c.Username, err)
+		}
 	}()
 
 	// Abadiy tsikl - xabarlarni o'qish
@@ -74,8 +76,9 @@ func (c *Client) ReadPump() {
 //   - WebSocket connection'ni yopadi
 //
 // Ping/Pong mexanizmi:
-//   Server ping yuboradi -> Browser pong bilan javob beradi
-//   Agar browser javob bermasa, connection o'lik deb hisoblanadi
+//
+//	Server ping yuboradi -> Browser pong bilan javob beradi
+//	Agar browser javob bermasa, connection o'lik deb hisoblanadi
 func (c *Client) WritePump() {
 	// Config'dan timeout qiymatlarini olish (Hub orqali)
 	// Agar config yo'q bo'lsa, default qiymatlar ishlatiladi
@@ -83,7 +86,7 @@ func (c *Client) WritePump() {
 
 	if c.Hub != nil && c.Hub.Config != nil {
 		// writeWait kelajakda deadline qo'yish uchun ishlatilishi mumkin
-		// Hozircha golang.org/x/net/websocket kutubxonasi deadline'ni 
+		// Hozircha golang.org/x/net/websocket kutubxonasi deadline'ni
 		// to'g'ridan-to'g'ri qo'llab-quvvatlamaydi, shuning uchun comment qilamiz
 		// writeWait = c.Hub.Config.WriteWait
 		pingPeriod = c.Hub.Config.PingPeriod
@@ -92,8 +95,10 @@ func (c *Client) WritePump() {
 	// Ping yuborish uchun timer
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
-		ticker.Stop()  // Timer'ni to'xtatish
-		c.Conn.Close() // Connection'ni yopish
+		ticker.Stop() // Timer'ni to'xtatish
+		if err := c.Conn.Close(); err != nil {
+			log.Printf("Connection yopishda xato [%s]: %v", c.Username, err)
+		}
 	}()
 
 	// Abadiy tsikl - xabar yoki ping yuborish
