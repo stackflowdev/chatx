@@ -30,9 +30,8 @@ type Client struct {
 //  1. Client'ni Hub'dan unregister qiladi
 //  2. WebSocket connection'ni yopadi
 func (c *Client) ReadPump() {
-	// defer - function tugaganda (xato yoki normal) bajariladi
 	defer func() {
-		c.Hub.Unregister <- c // Hub'ga "men ketdim" deb xabar
+		c.Hub.Unregister <- c
 		if err := c.Conn.Close(); err != nil {
 			log.Printf("Connection yopishda xato [%s]: %v", c.Username, err)
 		}
@@ -41,14 +40,20 @@ func (c *Client) ReadPump() {
 	// Abadiy tsikl - xabarlarni o'qish
 	for {
 		var msg message.Message
-		// Browser'dan JSON xabar o'qish (blocking - xabar kelguncha kutadi)
 		err := websocket.JSON.Receive(c.Conn, &msg)
 		if err != nil {
 			log.Printf("Xabar o'qishda xato [%s]:%v", c.Username, err)
 			break
 		}
 
-		// Xabar content'ini validatsiya qilish (faqat chat type xabarlar uchun)
+		if msg.Type == message.MessageTypeTyping {
+			msg.Username = c.Username
+			msg.RoomID = c.RoomID
+			msg.Timestamp = time.Now().Unix()
+			c.Hub.Broadcast <- &msg
+			continue
+		}
+
 		if msg.Type == message.MessageTypeChat {
 			if err := validator.ValidateMessageContent(msg.Content); err != nil {
 				log.Printf("Xabar validation xatosi [%s]: %v", c.Username, err)

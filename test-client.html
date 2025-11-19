@@ -137,6 +137,22 @@
             background: #ccc;
             cursor: not-allowed;
         }
+        .typing-indicator {
+            padding: 10px 20px;
+            font-size: 13px;
+            color: #667eea;
+            font-style: italic;
+            min-height: 20px;
+            background: #f9f9f9;
+            border-top: 1px solid #eee;
+        }
+        .typing-indicator.active {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
     </style>
 </head>
 <body>
@@ -157,6 +173,8 @@
 
         <div class="messages" id="messages"></div>
 
+        <div class="typing-indicator" id="typingIndicator"></div>
+
         <div class="input-area">
             <input type="text" id="messageInput" placeholder="Xabar yozing..." disabled />
             <button id="sendBtn" onclick="sendMessage()" disabled>Yuborish</button>
@@ -167,6 +185,9 @@
         let ws = null;
         let username = "";
         let room = "";
+        let typingTimeout = null;
+        let typingUsers = new Set();
+        let typingHideTimeouts = {};
 
         function connect() {
             username = document.getElementById('usernameInput').value.trim();
@@ -225,7 +246,61 @@
             input.value = '';
         }
 
+        function sendTyping() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) return;
+            
+            const typingMsg = {
+                type: 'typing',
+                username: username,
+                room_id: room,
+                timestamp: Math.floor(Date.now() / 1000)
+            };
+            
+            ws.send(JSON.stringify(typingMsg));
+        }
+
+        function showTypingIndicator(user) {
+            if (user === username) return;
+            
+            typingUsers.add(user);
+            updateTypingDisplay();
+            
+            if (typingHideTimeouts[user]) {
+                clearTimeout(typingHideTimeouts[user]);
+            }
+            
+            typingHideTimeouts[user] = setTimeout(() => {
+                typingUsers.delete(user);
+                updateTypingDisplay();
+            }, 3000);
+        }
+
+        function updateTypingDisplay() {
+            const indicator = document.getElementById('typingIndicator');
+            
+            if (typingUsers.size === 0) {
+                indicator.textContent = '';
+                indicator.classList.remove('active');
+            } else if (typingUsers.size === 1) {
+                const user = Array.from(typingUsers)[0];
+                indicator.textContent = `${user} yozyapti...`;
+                indicator.classList.add('active');
+            } else if (typingUsers.size === 2) {
+                const users = Array.from(typingUsers);
+                indicator.textContent = `${users[0]} va ${users[1]} yozyapti...`;
+                indicator.classList.add('active');
+            } else {
+                indicator.textContent = `${typingUsers.size} kishi yozyapti...`;
+                indicator.classList.add('active');
+            }
+        }
+
         function addMessage(message) {
+            if (message.type === 'typing') {
+                showTypingIndicator(message.username);
+                return;
+            }
+            
             const messagesDiv = document.getElementById('messages');
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message';
@@ -274,6 +349,14 @@
             const date = new Date(timestamp * 1000);
             return date.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' });
         }
+
+        // Typing detection
+        document.getElementById('messageInput').addEventListener('input', function(e) {
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                sendTyping();
+            }, 300);
+        });
 
         // Enter tugmasi bilan xabar yuborish
         document.getElementById('messageInput').addEventListener('keypress', function(e) {

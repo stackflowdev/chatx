@@ -1,10 +1,10 @@
 package websocket
 
 import (
-	"context"
 	"chatx/internal/config"
 	"chatx/internal/message"
 	"chatx/internal/store"
+	"context"
 	"log"
 	"time"
 )
@@ -63,10 +63,12 @@ type Hub struct {
 // to'g'ri boshlang'ich holatda yaratish uchun ishlatiladigan standart usul.
 //
 // Parametrlar:
-//   cfg - ilova konfiguratsiyasi (store size, timeouts va boshqalar)
+//
+//	cfg - ilova konfiguratsiyasi (store size, timeouts va boshqalar)
 //
 // Qaytaradi:
-//   *Hub - to'liq initialize qilingan Hub instance
+//
+//	*Hub - to'liq initialize qilingan Hub instance
 //
 // Nima uchun make() ishlatiladi?
 //   - make(map) - bo'sh map yaratadi (nil emas!)
@@ -135,18 +137,19 @@ func (h *Hub) Run(ctx context.Context) {
 				}
 			}
 
-		case message := <-h.Broadcast:
+		case msg := <-h.Broadcast:
 			// Xabarni store'ga saqlash (faqat 1 marta, room bo'yicha)
-			if h.Store != nil && message != nil {
-				h.Store.AddMessage(message)
+			// Typing message'lar tarixda saqlanmaydi
+			if h.Store != nil && msg != nil && msg.Type != message.MessageTypeTyping {
+				h.Store.AddMessage(msg)
 			}
 
 			// Faqat o'sha room'dagi clientlarga yuborish
 			for client := range h.Clients {
 				// Room filterlash - faqat bir xil room'dagi clientlar xabar oladi
-				if client.RoomID == message.RoomID {
+				if client.RoomID == msg.RoomID {
 					select {
-					case client.Send <- message:
+					case client.Send <- msg:
 					default:
 						close(client.Send)
 						delete(h.Clients, client)
