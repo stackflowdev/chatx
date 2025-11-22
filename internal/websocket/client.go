@@ -46,6 +46,8 @@ func (c *Client) ReadPump() {
 			break
 		}
 
+		c.updateActivity()
+
 		if msg.Type == message.MessageTypeTyping {
 			msg.Username = c.Username
 			msg.RoomID = c.RoomID
@@ -135,4 +137,13 @@ func (c *Client) WritePump() {
 			// err := websocket.Message.Send(c.Conn, []byte("ping"))
 		}
 	}
+}
+
+func (c *Client) updateActivity() {
+	c.Hub.mu.Lock()
+	if c.Hub.OnlineUsers[c.RoomID] != nil {
+		c.Hub.OnlineUsers[c.RoomID][c.Username] = time.Now()
+	}
+
+	c.Hub.mu.Unlock()
 }

@@ -1,10 +1,11 @@
 package message
 
 const (
-	MessageTypeChat   = "chat"
-	MessageTypeJoin   = "join"
-	MessageTypeLeave  = "leave"
-	MessageTypeTyping = "typing"
+	MessageTypeChat     = "chat"
+	MessageTypeJoin     = "join"
+	MessageTypeLeave    = "leave"
+	MessageTypeTyping   = "typing"
+	MessageTypePresence = "presence"
 )
 
 type Message struct {

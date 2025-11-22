@@ -5,7 +5,9 @@ import (
 	"chatx/internal/message"
 	"chatx/internal/store"
 	"context"
+	"encoding/json"
 	"log"
+	"sync"
 	"time"
 )
 
@@ -55,33 +57,24 @@ type Hub struct {
 
 	// Config - ilova konfiguratsiyasi (timeouts, sizes, history count va boshqalar).
 	// Hub orqali barcha client'lar config'ga murojaat qilishi mumkin.
-	Config *config.Config
+	Config      *config.Config
+	OnlineUsers map[string]map[string]time.Time // roomID -> username -> last seen time
+	mu          sync.Mutex
 }
 
-// NewHub - yangi Hub instance yaratadi va barcha zarur channel'lar hamda
-// map'larni initialize qiladi. Bu constructor pattern - Go'da struct'larni
-// to'g'ri boshlang'ich holatda yaratish uchun ishlatiladigan standart usul.
-//
-// Parametrlar:
-//
-//	cfg - ilova konfiguratsiyasi (store size, timeouts va boshqalar)
-//
-// Qaytaradi:
-//
-//	*Hub - to'liq initialize qilingan Hub instance
-//
 // Nima uchun make() ishlatiladi?
 //   - make(map) - bo'sh map yaratadi (nil emas!)
 //   - make(chan) - channel yaratadi (buffered yoki unbuffered)
 //   - Agar make() qilmasak, map va channel nil bo'ladi va panic beradi
 func NewHub(cfg *config.Config) *Hub {
 	return &Hub{
-		Clients:    make(map[*Client]bool),
-		Broadcast:  make(chan *message.Message),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Store:      store.NewStore(cfg.StoreMaxSize),
-		Config:     cfg, // Config'ni saqlash - client'lar ishlatishi uchun
+		Clients:     make(map[*Client]bool),
+		Broadcast:   make(chan *message.Message),
+		Register:    make(chan *Client),
+		Unregister:  make(chan *Client),
+		Store:       store.NewStore(cfg.StoreMaxSize),
+		Config:      cfg,
+		OnlineUsers: make(map[string]map[string]time.Time),
 	}
 }
 
@@ -96,6 +89,9 @@ func NewHub(cfg *config.Config) *Hub {
 // Select statement orqali qaysi channel'ga ma'lumot kelganini aniqlaydi
 // va tegishli amalni bajaradi.
 func (h *Hub) Run(ctx context.Context) {
+	cleanupTicker := time.NewTicker(30 * time.Second)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 
@@ -104,8 +100,22 @@ func (h *Hub) Run(ctx context.Context) {
 			// Qo'shimcha cleanup (connectionlarni yoping) kerak bo'lsa shu yerga qo'shing
 			return
 
+		case <-cleanupTicker.C:
+			h.cleanupStaleUsers()
+
 		case client := <-h.Register:
 			h.Clients[client] = true
+			// Online users'ga qo'shish
+			h.mu.Lock()
+			if h.OnlineUsers[client.RoomID] == nil {
+				h.OnlineUsers[client.RoomID] = make(map[string]time.Time)
+			}
+			h.OnlineUsers[client.RoomID][client.Username] = time.Now()
+			h.mu.Unlock()
+
+			// Presence broadcast
+			h.broadcastPresence(client.RoomID)
+
 			log.Printf("Hub: register client %s (room=%s)", client.Username, client.RoomID)
 
 		case client := <-h.Unregister:
@@ -113,6 +123,15 @@ func (h *Hub) Run(ctx context.Context) {
 				delete(h.Clients, client)
 				close(client.Send)
 				log.Printf("Hub: unregister client %s (room=%s)", client.Username, client.RoomID)
+
+				// Online users'dan o'chirish
+				h.mu.Lock()
+				if h.OnlineUsers[client.RoomID] != nil {
+					delete(h.OnlineUsers[client.RoomID], client.Username)
+				}
+				h.mu.Unlock()
+
+				h.broadcastPresence(client.RoomID)
 
 				// Leave message yaratish va barcha qolgan clientlarga yuborish
 				leaveMsg := &message.Message{
@@ -155,6 +174,56 @@ func (h *Hub) Run(ctx context.Context) {
 						delete(h.Clients, client)
 					}
 				}
+			}
+		}
+	}
+}
+
+// broadcastPresence - room'dage online user'lar ro'xatini broadcast qiladi
+func (h *Hub) broadcastPresence(roomID string) {
+	h.mu.Lock()
+	users := make([]string, 0, len(h.OnlineUsers[roomID]))
+	for username := range h.OnlineUsers[roomID] {
+		users = append(users, username)
+	}
+	h.mu.Unlock()
+
+	usersJSON, _ := json.Marshal(users)
+
+	presenceMsg := &message.Message{
+		Type:      message.MessageTypePresence,
+		Content:   string(usersJSON),
+		RoomID:    roomID,
+		Timestamp: time.Now().Unix(),
+	}
+
+	// Faqat o'sha room'dagi clientlarge yuborish
+	for client := range h.Clients {
+		if client.RoomID == roomID {
+			select {
+			case client.Send <- presenceMsg:
+			default:
+				close(client.Send)
+				delete(h.Clients, client)
+			}
+		}
+	}
+}
+
+// cleanupStaleUsers - 2 minutdan ortiq ko'rinmagan user'larni online ro'yxatidan o'chiradi
+func (h *Hub) cleanupStaleUsers() {
+	now := time.Now()
+	staleThreshold := 2 * time.Minute
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for roomID, users := range h.OnlineUsers {
+		for username, lastActivity := range users {
+			if now.Sub(lastActivity) > staleThreshold {
+				delete(users, username)
+				log.Printf("HUB: cleanup stale user %s from room %s", username, roomID)
+				// Presence update yuborish (Lock ichida emas)
+				go h.broadcastPresence(roomID)
 			}
 		}
 	}
