@@ -4,6 +4,7 @@ import (
 	"chatx/internal/message"
 	"chatx/internal/validator"
 	"log"
+	"strings"
 	"time"
 
 	"golang.org/x/net/websocket"
@@ -61,6 +62,48 @@ func (c *Client) ReadPump() {
 				log.Printf("Xabar validation xatosi [%s]: %v", c.Username, err)
 				continue // Bu xabarni ignore qilamiz, keyingisini o'qiymiz
 			}
+		}
+
+		// SHAXSIY XABAR (Direct Message) tekshiruvi
+		// Agar xabar "@" bilan boshlansa, bu Direct Message hisoblanadi
+		// Format: "@username xabar matni"
+		// Misol: "@john salom qalaysan?" -> john'ga shaxsiy xabar yuboradi
+		if strings.HasPrefix(msg.Content, "@") {
+			// Xabarni ikki qismga bo'lamiz: "@username" va "xabar matni"
+			// SplitN(content, " ", 2) -> maksimum 2 qismga bo'ladi
+			// parts[0] = "@username"
+			// parts[1] = "xabar matni" (qolgan hamma narsa)
+			parts := strings.SplitN(msg.Content, " ", 2)
+			if len(parts) >= 2 {
+				// "@" belgisini olib tashlaymiz -> faqat username qoladi
+				recipient := strings.TrimPrefix(parts[0], "@")
+				// Xabar matnini ajratib olamiz (1-index = ikkinchi qism)
+				dmContent := parts[1]
+
+				// Recipient username validatsiyadan o'tkazish
+				// Username 1-20 ta belgi bo'lishi kerak
+				if err := validator.ValidateUsername(recipient); err != nil {
+					log.Printf("Noto'g'ri DM qabul qiluvchi [%s]: %v", c.Username, err)
+					continue // Validation muvaffaqiyatsiz - xabarni ignore qilamiz
+				}
+
+				// Message type'ni DM ga o'zgartiramiz
+				msg.Type = message.MessageTypeDM
+				// Qabul qiluvchini belgilaymiz (Hub bu field'dan foydalanadi)
+				msg.Recipient = recipient
+				// Xabar matnini to'g'irlaymiz ("@username " qismisiz)
+				msg.Content = dmContent
+				// Metadata qo'shamiz
+				msg.Username = c.Username
+				msg.RoomID = c.RoomID
+				msg.Timestamp = time.Now().Unix()
+
+				// Hub'ga yuboramiz - Hub.sendDirectMessage() metodi bu xabarni
+				// faqat recipient va sender'ga yuboradi (boshqa hech kim ko'rmaydi)
+				c.Hub.Broadcast <- &msg
+				continue // Keyingi xabarni o'qishga o'tamiz
+			}
+
 		}
 
 		// Xabarga metadata qo'shish (client browser'da yubormasligi mumkin)
@@ -140,10 +183,30 @@ func (c *Client) WritePump() {
 }
 
 func (c *Client) updateActivity() {
-	c.Hub.mu.Lock()
-	if c.Hub.OnlineUsers[c.RoomID] != nil {
-		c.Hub.OnlineUsers[c.RoomID][c.Username] = time.Now()
+	// Nil tekshiruvlari: kutilmagan paniklarni oldini olish
+	// Guard against nil receiver or nil Hub to avoid panics
+	if c == nil || c.Hub == nil {
+		return
 	}
 
-	c.Hub.mu.Unlock()
+	// Mutex: Lock/Unlock — Hub.mu bilan himoya qilinadi
+	// Use c.Hub.mu.Lock() and defer Unlock() to ensure thread-safety
+	c.Hub.mu.Lock()
+	defer c.Hub.mu.Unlock()
+
+	// `OnlineUsers` map'ini ishga tushurish kerak bo'lsa, init qilamiz
+	// Type: map[string]map[string]time.Time
+	if c.Hub.OnlineUsers == nil {
+		c.Hub.OnlineUsers = make(map[string]map[string]time.Time)
+	}
+
+	// Xonaning (room) ichidagi map mavjudligini ta'minlaymiz
+	// Agar `OnlineUsers[c.RoomID]` nil bo'lsa, yangi map yaratamiz
+	if c.Hub.OnlineUsers[c.RoomID] == nil {
+		c.Hub.OnlineUsers[c.RoomID] = make(map[string]time.Time)
+	}
+
+	// Oxirgi faoliyat vaqtini yozamiz (last-seen)
+	// `OnlineUsers[roomID][username] = time.Now()` — bu keyinchalik presence uchun ishlatiladi
+	c.Hub.OnlineUsers[c.RoomID][c.Username] = time.Now()
 }

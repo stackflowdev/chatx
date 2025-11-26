@@ -6,6 +6,7 @@ const (
 	MessageTypeLeave    = "leave"
 	MessageTypeTyping   = "typing"
 	MessageTypePresence = "presence"
+	MessageTypeDM       = "dm"
 )
 
 type Message struct {
@@ -14,4 +15,5 @@ type Message struct {
 	Username  string `json:"username"`
 	RoomID    string `json:"room_id"`
 	Timestamp int64  `json:"timestamp"`
+	Recipient string `json:"recipient,omitempty"`
 }

@@ -6,6 +6,7 @@ import (
 	"chatx/internal/store"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -60,6 +61,7 @@ type Hub struct {
 	Config      *config.Config
 	OnlineUsers map[string]map[string]time.Time // roomID -> username -> last seen time
 	mu          sync.Mutex
+	UserClients map[string]*Client // username -> Client pointer
 }
 
 // Nima uchun make() ishlatiladi?
@@ -75,6 +77,7 @@ func NewHub(cfg *config.Config) *Hub {
 		Store:       store.NewStore(cfg.StoreMaxSize),
 		Config:      cfg,
 		OnlineUsers: make(map[string]map[string]time.Time),
+		UserClients: make(map[string]*Client),
 	}
 }
 
@@ -105,8 +108,8 @@ func (h *Hub) Run(ctx context.Context) {
 
 		case client := <-h.Register:
 			h.Clients[client] = true
-			// Online users'ga qo'shish
 			h.mu.Lock()
+			h.UserClients[client.Username] = client
 			if h.OnlineUsers[client.RoomID] == nil {
 				h.OnlineUsers[client.RoomID] = make(map[string]time.Time)
 			}
@@ -126,6 +129,7 @@ func (h *Hub) Run(ctx context.Context) {
 
 				// Online users'dan o'chirish
 				h.mu.Lock()
+				delete(h.UserClients, client.Username)
 				if h.OnlineUsers[client.RoomID] != nil {
 					delete(h.OnlineUsers[client.RoomID], client.Username)
 				}
@@ -157,7 +161,10 @@ func (h *Hub) Run(ctx context.Context) {
 			}
 
 		case msg := <-h.Broadcast:
-			// Xabarni store'ga saqlash (faqat 1 marta, room bo'yicha)
+			if msg.Type == message.MessageTypeDM {
+				h.sendDirectMessage(msg)
+				continue
+			}
 			// Typing message'lar tarixda saqlanmaydi
 			if h.Store != nil && msg != nil && msg.Type != message.MessageTypeTyping {
 				h.Store.AddMessage(msg)
@@ -165,7 +172,6 @@ func (h *Hub) Run(ctx context.Context) {
 
 			// Faqat o'sha room'dagi clientlarga yuborish
 			for client := range h.Clients {
-				// Room filterlash - faqat bir xil room'dagi clientlar xabar oladi
 				if client.RoomID == msg.RoomID {
 					select {
 					case client.Send <- msg:
@@ -225,6 +231,87 @@ func (h *Hub) cleanupStaleUsers() {
 				// Presence update yuborish (Lock ichida emas)
 				go h.broadcastPresence(roomID)
 			}
+		}
+	}
+}
+
+// sendDirectMessage - shaxsiy xabarni faqat recipient va sender'ga yuboradi.
+// Bu method DM (Direct Message) xabarlarini tarqatish uchun ishlatiladi.
+//
+// Direct Message ishlash mexanizmi:
+//  1. UserClients map'dan recipient va sender'ni izlaymiz (O(1) vaqt complexity)
+//  2. Agar recipient online bo'lmasa, sender'ga system xato xabari yuboramiz
+//  3. Agar recipient online bo'lsa, xabarni unga yuboramiz
+//  4. Xabarni sender'ga ham yuboramiz (chat UI'da o'z xabarimizni ko'rish uchun)
+//
+// Xato holatlar:
+//   - Recipient offline/topilmadi -> sender'ga "User X is not online" xabari
+//   - Recipient channel to'liq -> xabar yo'qoladi, log'ga yoziladi
+//   - Sender channel to'liq -> sender o'z nusxasini ko'rmaydi
+//
+// Concurrency: Lock() bilan himoyalangan (thread-safe)
+func (h *Hub) sendDirectMessage(msg *message.Message) {
+	// QADAM 1: Recipient va Sender'ni UserClients map'dan topish
+	// Lock() ishlatamiz chunki UserClients'ni o'qiyapmiz
+	// Bu bir vaqtning o'zida ko'plab goroutine'lar xavfsiz o'qishi uchun
+	h.mu.Lock()
+	recipient := h.UserClients[msg.Recipient] // Qabul qiluvchi
+	sender := h.UserClients[msg.Username]     // Yuboruvchi
+	h.mu.Unlock()
+
+	// QADAM 2: Recipient mavjudligini tekshirish
+	// Agar recipient == nil -> foydalanuvchi offline yoki mavjud emas
+	if recipient == nil {
+		// Sender'ga xato xabarini yuborish
+		if sender != nil {
+			// System xato xabarini yaratish
+			// Bu xabar faqat sender'ga ko'rinadi (recipient'ga emas)
+			errorMsg := &message.Message{
+				Type:      message.MessageTypeChat, // Oddiy chat type (DM emas)
+				Content:   fmt.Sprintf("User %s is not online or does not exist.", msg.Recipient),
+				Username:  "System",       // System tomonidan yuborilgan
+				RoomID:    sender.RoomID,  // Sender'ning xonasi
+				Timestamp: time.Now().Unix(),
+			}
+
+			// Xato xabarini sender'ga yuborish
+			select {
+			case sender.Send <- errorMsg:
+				// Muvaffaqiyatli yuborildi
+			default:
+				// Sender'ning channel to'liq - xabar yo'qoladi
+				// Bu holat juda kamdan-kam yuz beradi (channel size = 256)
+			}
+		}
+		log.Printf("HUB: DM muvaffaqiyatsiz - qabul qiluvchi '%s' topilmadi", msg.Recipient)
+		return // Recipient yo'q - boshqa hech narsa qilmaymiz
+	}
+
+	// QADAM 3: Xabarni recipient'ga yuborish
+	// select/default pattern: Agar channel to'liq bo'lsa, blocking bo'lmaydi
+	select {
+	case recipient.Send <- msg:
+		// Muvaffaqiyatli yuborildi
+		log.Printf("HUB: DM yuborildi %s -> %s", msg.Username, msg.Recipient)
+	default:
+		// Recipient'ning Send channel to'liq (256 ta xabar kutmoqda)
+		// Bu holat recipient browser'i sekin ishlayotganini bildiradi
+		// Xabarni tashlashimiz kerak (blocking qilmaslik uchun)
+		log.Printf("HUB: DM muvaffaqiyatsiz - recipient %s channel to'liq", msg.Recipient)
+	}
+
+	// QADAM 4: Xabarni sender'ga ham yuborish (echo)
+	// Nima uchun kerak?
+	//   - Sender o'z yuborgan xabarini chat UI'da ko'rishi kerak
+	//   - Browser faqat server'dan kelgan xabarlarni ko'rsatadi
+	//   - Agar sender o'ziga DM yuborsa (selftest), ikki marta yuborilmasligi kerak
+	if sender != nil && sender != recipient {
+		select {
+		case sender.Send <- msg:
+			// Muvaffaqiyatli yuborildi (sender o'z xabarini ko'radi)
+		default:
+			// Sender'ning channel to'liq
+			// Sender o'z xabarini ko'rmaydi, lekin recipient olgan
 		}
 	}
 }

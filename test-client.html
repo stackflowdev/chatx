@@ -384,6 +384,33 @@
             font-style: italic;
         }
         
+        /* Direct Messages (DM) */
+        .message.dm {
+            background: linear-gradient(135deg, rgba(147, 51, 234, 0.08), rgba(126, 34, 206, 0.05));
+            border-radius: 12px;
+            padding: 12px;
+            margin: 4px 0;
+            border-left: 3px solid var(--primary-600);
+        }
+        
+        .message.dm .message-username::before {
+            content: '🔒 ';
+            opacity: 0.8;
+        }
+        
+        .message.dm .dm-label {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--primary-600);
+            background: rgba(124, 58, 237, 0.15);
+            padding: 2px 8px;
+            border-radius: 8px;
+            margin-left: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
         /* ===== TYPING INDICATOR ===== */
         .typing-indicator {
             padding: 8px 24px;
@@ -743,7 +770,7 @@
                     <input 
                         type="text" 
                         id="messageInput" 
-                        placeholder="Xabar yozing..." 
+                        placeholder="Xabar yozing... (@username - shaxsiy xabar)" 
                         disabled
                         autocomplete="off"
                     />
@@ -830,6 +857,9 @@
                 case 'join':
                 case 'leave':
                     addSystemMessage(message.content);
+                    break;
+                case 'dm':
+                    addDirectMessage(message);
                     break;
                 case 'chat':
                     addChatMessage(message);
@@ -969,6 +999,39 @@
                     <div class="message-text">${text}</div>
                 </div>
             `;
+            messagesDiv.appendChild(messageDiv);
+            setTimeout(() => {
+                messagesDiv.scrollTo({
+                    top: messagesDiv.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }, 100);
+        }
+        
+        function addDirectMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message dm';
+            
+            const firstLetter = message.username.charAt(0).toUpperCase();
+            
+            // Determine label based on whether you're sender or recipient
+            const dmLabel = message.username === username 
+                ? `→ ${message.recipient}` 
+                : `from ${message.username}`;
+            
+            messageDiv.innerHTML = `
+                <div class="message-avatar">${firstLetter}</div>
+                <div class="message-content">
+                    <div class="message-header">
+                        <span class="message-username">${message.username}</span>
+                        <span class="dm-label">${dmLabel}</span>
+                        <span class="message-time">${formatTime(message.timestamp)}</span>
+                    </div>
+                    <div class="message-text">${escapeHtml(message.content)}</div>
+                </div>
+            `;
+            
             messagesDiv.appendChild(messageDiv);
             setTimeout(() => {
                 messagesDiv.scrollTo({
