@@ -183,8 +183,6 @@ func (c *Client) WritePump() {
 }
 
 func (c *Client) updateActivity() {
-	// Nil tekshiruvlari: kutilmagan paniklarni oldini olish
-	// Guard against nil receiver or nil Hub to avoid panics
 	if c == nil || c.Hub == nil {
 		return
 	}

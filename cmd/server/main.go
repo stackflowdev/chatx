@@ -1,10 +1,10 @@
 package main
 
 import (
-	"context"
 	"chatx/internal/config"
 	"chatx/internal/handler"
 	"chatx/internal/websocket"
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -13,36 +13,26 @@ import (
 	"time"
 )
 
-// main - dasturning asosiy kirish nuqtasi.
-// Bu yerda:
-//  1. Hub yaratiladi va alohida goroutine'da ishga tushiriladi
-//  2. HTTP handler'lar sozlanadi
-//  3. Server port 8080'da ishga tushadi
 func main() {
-	// 1) Config o'qish
 	cfg := config.NewConfig()
-	log.Printf("Starting server with config: port=%s store_max=%d history=%d",
-		cfg.ServerPort, cfg.StoreMaxSize, cfg.HistoryCount)
+	log.Printf("Starting server with config: port=%s history=%d", cfg.ServerPort, cfg.HistoryCount)
 
-	// 2) Hub yaratish (store size config orqali uzatiladi)
 	hub := websocket.NewHub(cfg)
 
-	// 3) Hub'ni kontekst bilan ishga tushirish (graceful stop uchun)
+	// Hub'ni kontekst bilan ishga tushirish (graceful stop uchun)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go hub.Run(ctx)
 
-	// 4) Handler yaratish va route sozlash
 	// Handler'ga hub va config uzatiladi (dependency injection pattern)
 	chatHandler := handler.NewChatHandler(hub, cfg)
 	http.HandleFunc("/ws", chatHandler.ServeWS)
 
-	// 5) HTTP server yaratish va alohida goroutine'da ishga tushirish
+	// HTTP server yaratish va alohida goroutine'da ishga tushirish
 	srv := &http.Server{
 		Addr:    cfg.ServerPort,
 		Handler: nil,
 	}
-
 
 	go func() {
 		log.Printf("Server listening on %s", cfg.ServerPort)
